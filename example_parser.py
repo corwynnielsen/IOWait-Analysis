@@ -1,12 +1,10 @@
 """ X """
 import gzip
 import logging
-import numpy
 import string
 import os
 import sys
-import datetime
-import threading
+import numpy
 
 SF_SCHEMA_CHAR = '!'
 SF_DEVICES_CHAR = '@'
@@ -15,11 +13,17 @@ SF_PROPERTY_CHAR = '$'
 SF_MARK_CHAR = '%'
 
 (PENDING_FIRST_RECORD, ACTIVE, ACTIVE_IGNORE, LAST_RECORD, DONE) = range(0, 5)
-STATENAMES = {PENDING_FIRST_RECORD: "PENDING_FIRST_RECORD", ACTIVE: "ACTIVE", ACTIVE_IGNORE: "ACTIVE_IGNORE", LAST_RECORD: "LAST_RECORD", DONE: "DONE"}
+STATENAMES = {
+    PENDING_FIRST_RECORD: "PENDING_FIRST_RECORD",
+    ACTIVE: "ACTIVE",
+    ACTIVE_IGNORE: "ACTIVE_IGNORE",
+    LAST_RECORD: "LAST_RECORD",
+    DONE: "DONE"
+}
 
 def schema_fixup(type_name, desc):
-    """ This function implements a workaround for a known issue with incorrect schema """
-    """ definitions for irq, block and sched tacc_stats metrics. """
+    """ This function implements a workaround for a known issue with incorrect schema,
+    definitions for irq, block and sched tacc_stats metrics. """
 
     if type_name == "irq":
         # All of the irq metrics are 32 bits wide
@@ -31,7 +35,7 @@ def schema_fixup(type_name, desc):
     elif type_name == "sched":
         # Most sched counters are 32 bits wide with 3 exceptions
         res = ""
-        sixtyfourbitcounters = [ "running_time,E,U=ms", "waiting_time,E,U=ms", "pcount,E" ]
+        sixtyfourbitcounters = ["running_time,E,U=ms", "waiting_time,E,U=ms", "pcount,E"]
         for token in desc.split():
             if token in sixtyfourbitcounters:
                 res += token.strip() + " "
@@ -41,7 +45,12 @@ def schema_fixup(type_name, desc):
     elif type_name == "block":
         # Most block counters are 64bits wide with a few exceptions
         res = ""
-        thirtytwobitcounters = [ "rd_ticks,E,U=ms", "wr_ticks,E,U=ms", "in_flight", "io_ticks,E,U=ms", "time_in_queue,E,U=ms" ]
+        thirtytwobitcounters = [
+            "rd_ticks,E,U=ms",
+            "wr_ticks,E,U=ms",
+            "in_flight", "io_ticks,E,U=ms",
+            "time_in_queue,E,U=ms"
+            ]
         for token in desc.split():
             if token in thirtytwobitcounters:
                 res += token.strip() + ",W=32 "
@@ -53,7 +62,7 @@ def schema_fixup(type_name, desc):
         res = ""
         for token in desc.split():
             token = token.strip()
-            if token.startswith("syscall_") and ( token.endswith("_s,E,U=s") or token.endswith("_ns,E,U=ns")):
+            if token.startswith("syscall_") and (token.endswith("_s,E,U=s") or token.endswith("_ns,E,U=ns")):
                 res += string.replace(token, "E,", "") + " "
             else:
                 res += token + " "
@@ -154,22 +163,24 @@ class Schema(dict):
     def __delitem__(self, k, v):
         self._notsup('item deletion')
 
-    def pop(self, k, d=None):
+    def pop(self):
         self._notsup('removal')
 
     def popitem(self):
         self._notsup('removal')
 
-    def setdefault(self, k, d=None):
+    def setdefault(self):
         self._notsup("item assignment")
 
-    def update(self, **args):
+    def update(self):
         self._notsup("update")
 
     def items(self):
         return zip(self._key_list, self._value_list)
 
-    def iteritems(self):fixup
+    def iteritems(self):
+        for k in self._key_list:
+            yield (k, dict.__getitem__(self, k))
 
     def iterkeys(self):
         return self._key_list.__iter__()
@@ -191,26 +202,17 @@ class SimpleTaccParser(object):
 
         self.procdump = None
 
-        #Lists to store IOWait data in dict_of_iowait_lists dictionary
+        #self.error_dict holds the filename as well as a list of lists that
+        #contain the cpu affected and timestamp
+        self.error_dict = {}
 
-        self.cpu0_list = []
-        self.cpu1_list = []
-        self.cpu2_list = []
-        self.cpu3_list = []
-        self.cpu4_list = []
-        self.cpu5_list = []
-        self.cpu6_list = []
-        self.cpu7_list = []
-        self.cpu8_list = []
-        self.cpu9_list = []
-        self.cpu10_list = []
-        self.cpu11_list = []
-        self.cpu12_list = []
-        self.cpu13_list = []
-        self.cpu14_list = []
-        self.cpu15_list = []
+        #self.dict_of_iowait_lists holds the values of each iowait value for
+        #each cpu, clears after file ends using gen_new_dict
+        self.dict_of_iowait_lists = {
+            'cpu0': [], 'cpu1': [], 'cpu2': [], 'cpu3': [], 'cpu4': [],
+            'cpu5': [], 'cpu6': [], 'cpu7': [], 'cpu8': [], 'cpu9': [], 'cpu10': [],
+            'cpu11': [], 'cpu12': [], 'cpu13': [], 'cpu14': [], 'cpu15': []}
 
-        self.dict_of_iowait_lists = {}
         self.times = []
         self.raw_stats = {}
         self.marks = {}
@@ -235,7 +237,7 @@ class SimpleTaccParser(object):
     def get_schema(self, type_name, desc=None):
         schema = self.schemas.get(type_name)
         if schema:
-            if desc and schema.desc != schema_fixup(type_name,desc):
+            if desc and schema.desc != schema_fixup(type_name, desc):
                 # ...
                 return None
         elif desc:
@@ -256,8 +258,8 @@ class SimpleTaccParser(object):
                         file_schemas[type_name] = schema
                     else:
                         self.mismatch_schemas[type_name] = 1
-                        self.error("file `%s', type `%s', schema mismatch desc `%s'",
-                                   fp.name, type_name, schema_desc)
+                        # self.error("file `%s', type `%s', schema mismatch desc `%s'",
+                        #            fp.name, type_name, schema_desc)
                 elif c == SF_PROPERTY_CHAR:
                     if line.startswith("$tacc_stats"):
                         self.tacc_version = line.split(" ")[1].strip()
@@ -309,17 +311,17 @@ class SimpleTaccParser(object):
             self.processdata(line)
         elif ch == SF_SCHEMA_CHAR:
             self.processschema(line)
-            try:
-                self.processmark(line)
-            except TypeError as e:
-                self.error("TypeError %s in %s line %s", str(e), self.filename, self.fileline)
+        elif ch == SF_PROPERTY_CHAR:
+            pass
+        elif ch == SF_MARK_CHAR:
+            pass
         else:
             logging.warning("Unregognised character \"%s\" in %s on line %s ",
                             ch, self.filename, self.fileline)
             pass
 
-    def setstate(self, newstate, reason = None):
-        self.trace("TRANS {} -> {} ({})".format( STATENAMES[self.state], STATENAMES[newstate], reason ) )
+    def setstate(self, newstate, reason=None):
+        self.trace("TRANS {} -> {} ({})".format( STATENAMES[self.state], STATENAMES[newstate], reason ))
         self.state = newstate
 
     def processtimestamp(self, line):
@@ -331,6 +333,27 @@ class SimpleTaccParser(object):
         except IndexError as e:
             self.error("syntax error timestamp in file '%s' line %s", self.filename, self.fileline)
             return
+
+#Checks the specified dictionary containing iowait numers for inconsistencies, specificially drops in iowait values. Inconsistencies
+#are added to a new dictionary with the file name as a key and the value being a list of lists containing the cpu number and timestamp
+
+    def check_lists_for_discrepencies(self, any_dict, filename):
+        counter = 0
+        for tuple in any_dict.items():
+            iowait_nums = tuple[1]
+            for num in iowait_nums:
+                counter += 1
+                if counter < len(iowait_nums) and num > iowait_nums[counter]:
+                    logging.error('Error with %s iowait numbers for list %s, %s decreased to %s'
+                    % (filename, tuple[0] , num, iowait_nums[counter]))
+                    if filename not in self.error_dict:
+                        self.error_dict[filename] = []
+                    self.error_dict[filename].append([tuple[0], self.timestamp])
+                if counter == len(iowait_nums):
+                    counter = 0
+
+        print self.error_dict
+        return self.error_dict
 
     def processdata(self,line):
 
@@ -357,31 +380,38 @@ class SimpleTaccParser(object):
 
             type_stats = self.raw_stats.setdefault(type_name, {})
             dev_stats = type_stats.setdefault(dev_name, [])
-            #if type_name == "cpu":
-                #logging.debug("Io wait counter for %s %s is %s", type_name, dev_name, vals[self.get_schema(type_name)['iowait'].index])
 
-            #Dictionary with the key being the cpu core number and the value being a list of IOWait times for each cpu
-            self.dict_of_iowait_lists = {'cpu0': self.cpu0_list, 'cpu1': self.cpu1_list, 'cpu2': self.cpu2_list, 'cpu3': self.cpu3_list, 'cpu4': self.cpu4_list,
-            'cpu5': self.cpu5_list, 'cpu6': self.cpu6_list, 'cpu7': self.cpu7_list, 'cpu8': self.cpu8_list, 'cpu9': self.cpu9_list, 'cpu10': self.cpu10_list,
-            'cpu11': self.cpu11_list, 'cpu12': self.cpu12_list, 'cpu13': self.cpu13_list, 'cpu14': self.cpu14_list, 'cpu15': self.cpu15_list,}
+            #Checks the numpy array for necessary values and puts them in a dict_of_iowait_lists for further processing
+
             matching_key_check = 'cpu%s' % (dev_name)
-
             if type_name == "cpu":
                 iowait_val = vals[self.get_schema(type_name)['iowait'].index]
-                for key in self.dict_of_iowait_lists.keys():
-                    if key == matching_key_check:
-                        self.dict_of_iowait_lists[key].append(iowait_val)
+                if matching_key_check in self.dict_of_iowait_lists.keys():
+                    key = 'cpu%s' % (dev_name)
+                    self.dict_of_iowait_lists[key].append(iowait_val)
 
-            self.write_dict_to_txt(self.dict_of_iowait_lists)
-            check_lists_for_discrepencies(self.dict_of_iowait_lists)
+# Writes inputed dictionary into a text file. Called by read_all_gz_files
 
     def write_dict_to_txt(self, any_dict):
         if not os.path.exists('dict_data.txt'):
             os.mknod("dict_data.txt")
-            'New file \'dict_data\' created'
+            print 'New file \'dict_data\' created'
         with open('dict_data.txt', 'r+') as f:
-                f.write(str(any_dict))
+            for filename, onelist in sorted(any_dict.items()):
+                easier_read_format = '%s ---> %s' % (filename, onelist)
+                f.write(easier_read_format)
+                f.write('\n')
 
+#Getter for dict_of_iowait_lists, used in read_all_gz_files to provide a parameter for check_lists_for_discrepencies
+
+    @property
+    def get_dict_of_iowait_lists(self):
+        return self.dict_of_iowait_lists
+
+#Setter for dict_of_iowait_lists, used to reset the dictionary when a new file is reached
+
+    def set_dict_of_iowait_lists(self, newval):
+        self.dict_of_iowait_lists = newval
 
     def processschema(self,line):
         print "processschema"
@@ -396,7 +426,8 @@ class SimpleTaccParser(object):
         mark = line[1:].strip()
         actions = mark.split()
         if not actions:
-            self.error("syntax error processmark file `%s' line `%s'", self.filename, self.fileline)
+            self.error("syntax error priocessmark file `%s' line `%s'",
+            self.filename, self.fileline)
             return
         if actions[0] == "end":
 
@@ -416,49 +447,59 @@ class SimpleTaccParser(object):
         pass
 
 
+
+#Generates a new dictionary, used to create a new dictionary for each file in a directory
+
+def gen_new_dict():
+    new_dict = {
+        'cpu0': [], 'cpu1': [], 'cpu2': [], 'cpu3': [], 'cpu4': [],
+        'cpu5': [], 'cpu6': [], 'cpu7': [], 'cpu8': [], 'cpu9': [], 'cpu10': [],
+        'cpu11': [], 'cpu12': [], 'cpu13': [], 'cpu14': [], 'cpu15': []
+        }
+    return new_dict
+
+#Reads all '.gz' files in a given directory. check_lists_for_discrepencies and write_dict_to_txt are called here
+
 def read_all_gz_files(path):
     filecount = 0
     list_of_gz_files = []
-    STP = SimpleTaccParser()
+    test_dict = {}
+
     for gz_file in os.listdir(path):
         if gz_file.endswith('.gz'):
             list_of_gz_files.append(gz_file)
-            for afile in list_of_gz_files:
-                list_of_gz_files = sorted(list_of_gz_files)
-                fullpath = os.path.join(path, afile)
-                with gzip.open(fullpath) as fp:
-                    filecount += 1
-                    print 'Opening file...%s' % (fullpath)
-                    iowait_debug_text = STP.read_stats_file(fp)
-    print 'Successfully read all files in directory'
 
-def check_lists_for_discrepencies(any_dict):
-    logging.basicConfig(format='%(asctime)s [%(levelname)s] %(message)s',
-                        datefmt='%Y-%m-%dT%H:%M:%S',
-                        level=logging.DEBUG)
-    counter = 0
-    #test_dict = {'a' : [123, 123, 126], 'b' : [123, 122, 126], 'c' : [123, 122, 126]}
-    #any_dict = test_dict
-    for tuple in any_dict.items():
-        iowait_nums = tuple [1]
-        for num in iowait_nums:
-            iowait_nums_index = iowait_nums.index(num)
-            counter += 1
-            if counter < len(iowait_nums) and num > iowait_nums[iowait_nums.index(num)+1]:
-                logging.DEBUG('Error with iowait numbers for list %s at indices %s and %s which had %s decrease to %s' % (tuple[0] ,iowait_nums_index, iowait_nums_index+1, iowait_nums[iowait_nums_index],iowait_nums[iowait_nums_index+1]))
-            if counter == len(iowait_nums):
-                counter = 0
+    if len(list_of_gz_files) != 0:
+        for afile in list_of_gz_files:
+            fullpath = os.path.join(path, afile)
+            with gzip.open(fullpath) as fp:
+                STP = SimpleTaccParser()
+                filecount += 1
+                STP.read_stats_file(fp)
+                checker = STP.check_lists_for_discrepencies(STP.get_dict_of_iowait_lists, afile)
+
+        print 'Successfully read all %s files in directory' % (filecount)
+
+    else:
+        print 'No \'.gz\' files in %s' % (path)
+
+
+#Main method takes in as many file arguments as necessary and checks each directory's files for errors. Handles if file path is invalid.
 
 def main():
-
     logging.basicConfig(format='%(asctime)s [%(levelname)s] %(message)s',
                         datefmt='%Y-%m-%dT%H:%M:%S',
                         level=logging.DEBUG)
-
-    path = '/home/corwynni/taccstats_data/stampede/test'
-    read_all_gz_files(path)
-    #check_lists_for_discrepencies()
-
+    file_names = sys.argv[1:]
+    if len(file_names) == 0:
+        print 'Please input the directory that holds \'.gz\' files'
+    else:
+        try:
+            for name in file_names:
+                print 'Reading files from directory: %s' % (name)
+                read_all_gz_files(name)
+        except OSError:
+            print 'Oops %s doesn\'t appear to be a valid file path!' % (name)
 
 if __name__ == "__main__":
     main()
