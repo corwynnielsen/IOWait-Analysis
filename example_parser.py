@@ -144,11 +144,11 @@ class Schema(dict):
         self.desc = desc
         self._key_list = []
         self._value_list = []
-        for i, s in enumerate(desc.split()):
-            e = SchemaEntry(i, s)
-            dict.__setitem__(self, e.key, e)
-            self._key_list.append(e.key)
-            self._value_list.append(e)
+        for index, schema in enumerate(desc.split()):
+            entry_point = SchemaEntry(index, schema)
+            dict.__setitem__(self, entry_point.key, entry_point)
+            self._key_list.append(entry_point.key)
+            self._value_list.append(entry_point)
 
     def __iter__(self):
         return self._key_list.__iter__()
@@ -160,7 +160,7 @@ class Schema(dict):
     def _notsup(self, s):
         raise TypeError("'Schema' object does not support %s" % s)
 
-    def __delitem__(self, k, v):
+    def __delitem__(self, k):
         self._notsup('item deletion')
 
     def pop(self):
@@ -196,23 +196,25 @@ class Schema(dict):
 
 
 class SimpleTaccParser(object):
-    """ """
+    """Takes Taccstats logs files and  """
 
     def __init__(self):
 
         self.procdump = None
+        self.file_schemas = {}
 
         #self.error_dict holds the filename as well as a list of lists that
         #contain the cpu affected and timestamp
         self.error_dict = {}
 
         #self.dict_of_iowait_lists holds the values of each iowait value for
-        #each cpu, clears after file ends using gen_new_dict
+        #each cpu, clears after file ends
         self.dict_of_iowait_lists = {
             'cpu0': [], 'cpu1': [], 'cpu2': [], 'cpu3': [], 'cpu4': [],
-            'cpu5': [], 'cpu6': [], 'cpu7': [], 'cpu8': [], 'cpu9': [], 'cpu10': [],
-            'cpu11': [], 'cpu12': [], 'cpu13': [], 'cpu14': [], 'cpu15': []}
-
+            'cpu5': [], 'cpu6': [], 'cpu7': [], 'cpu8': [], 'cpu9': [],
+            'cpu10': [], 'cpu11': [], 'cpu12': [], 'cpu13': [], 'cpu14': [],
+            'cpu15': []
+        }
         self.times = []
         self.raw_stats = {}
         self.marks = {}
@@ -228,6 +230,8 @@ class SimpleTaccParser(object):
         self.schemas = {}
         self.mismatch_schemas = {}
 
+
+#pylint: disable = W
     def trace(self, fmt, *args):
         logging.debug(fmt % args)
 
@@ -245,9 +249,9 @@ class SimpleTaccParser(object):
             schema = self.schemas[type_name] = Schema(desc)
         return schema
 
-    def read_stats_file_header(self, fp):
+    def read_stats_file_header(self, filepath):
         file_schemas = {}
-        for line in fp:
+        for line in filepath:
             self.fileline += 1
             try:
                 c = line[0]
@@ -263,40 +267,39 @@ class SimpleTaccParser(object):
                 elif c == SF_PROPERTY_CHAR:
                     if line.startswith("$tacc_stats"):
                         self.tacc_version = line.split(" ")[1].strip()
-                    pass
                 elif c == SF_COMMENT_CHAR:
                     pass
                 else:
                     break
             except Exception as exc:
                 self.error("file `%s', caught `%s' discarding line `%s'",
-                           fp.name, exc, line)
+                           filepath.name, exc, line)
                 break
         return file_schemas
 
 
-    def read_stats_file(self, fp):
+    def read_stats_file(self, filepath):
 
         if self.state == DONE:
             return
 
-        self.filename = fp.name
+        self.filename = filepath.name
         self.fileline = 0
 
-        self.file_schemas = self.read_stats_file_header(fp)
+        self.file_schemas = self.read_stats_file_header(filepath)
 
         if not self.file_schemas:
             self.error("file `%s' bad header on line %s", self.filename, self.fileline)
             return
 
         try:
-            for line in fp:
+            for line in filepath:
                 self.fileline += 1
                 self.parse(line.strip())
                 if self.state == DONE:
                     break
-        except Exception as e:
-            self.error("file `%s' exception %s on line %s", self.filename, str(e), self.fileline)
+        except Exception as any_exception:
+            self.error("file `%s' exception %s on line %s", self.filename, str(any_exception), self.fileline)
 
 
     def parse(self, line):
@@ -310,7 +313,7 @@ class SimpleTaccParser(object):
         elif ch.isalpha():
             self.processdata(line)
         elif ch == SF_SCHEMA_CHAR:
-            self.processschema(line)
+            self.processschema()
         elif ch == SF_PROPERTY_CHAR:
             pass
         elif ch == SF_MARK_CHAR:
@@ -318,10 +321,9 @@ class SimpleTaccParser(object):
         else:
             logging.warning("Unregognised character \"%s\" in %s on line %s ",
                             ch, self.filename, self.fileline)
-            pass
 
     def setstate(self, newstate, reason=None):
-        self.trace("TRANS {} -> {} ({})".format( STATENAMES[self.state], STATENAMES[newstate], reason ))
+        self.trace("TRANS {} -> {} ({})".format(STATENAMES[self.state], STATENAMES[newstate], reason))
         self.state = newstate
 
     def processtimestamp(self, line):
@@ -329,39 +331,55 @@ class SimpleTaccParser(object):
         recs = line.strip().split(" ")
         try:
             self.timestamp = float(recs[0])
-            jobs = recs[1].strip().split(",")
-        except IndexError as e:
+        except IndexError:
             self.error("syntax error timestamp in file '%s' line %s", self.filename, self.fileline)
             return
 
-#Checks the specified dictionary containing iowait numers for inconsistencies, specificially drops in iowait values. Inconsistencies
-#are added to a new dictionary with the file name as a key and the value being a list of lists containing the cpu number and timestamp
-
     def check_lists_for_discrepencies(self, any_dict, filename):
+        """
+        Checks the specified dictionary containing iowait numbers for
+        inconsistencies, specificially drops in iowait values. Inconsistencies
+        are added to a new dictionary with the file name as a key and the values
+        being a list of lists containing the cpu number and timestamp
+        """
         counter = 0
-        for tuple in any_dict.items():
-            iowait_nums = tuple[1]
+        extracted = self.extract_last_list_val(any_dict)
+        logging.debug(extracted)
+        for dict_tuple in any_dict.items():
+            iowait_nums = dict_tuple[1]
             for num in iowait_nums:
                 counter += 1
                 if counter < len(iowait_nums) and num > iowait_nums[counter]:
-                    logging.error('Error with %s iowait numbers for list %s, %s decreased to %s'
-                    % (filename, tuple[0] , num, iowait_nums[counter]))
+                    logging.error('Error with %s iowait numbers for list %s, %s decreased to %s', filename, dict_tuple[0], num, iowait_nums[counter])
                     if filename not in self.error_dict:
                         self.error_dict[filename] = []
-                    self.error_dict[filename].append([tuple[0], self.timestamp])
+                    self.error_dict[filename].append([dict_tuple[0], self.timestamp])
                 if counter == len(iowait_nums):
                     counter = 0
 
-        print self.error_dict
         return self.error_dict
 
-    def processdata(self,line):
+    def extract_last_list_val(self, any_dict):
+        list_of_last_vals = []
+        for value in any_dict.values():
+            if value[-1] not in list_of_last_vals:
+                list_of_last_vals.append(value[-1])
+        return list_of_last_vals
+
+    def append_last_vals(self, a_list, any_dict):
+        indexer = 0
+        for key in any_dict.keys():
+            any_dict[key].insert(0, a_list[indexer])
+            indexer += 1
+
+        logging.debug(self.dict_of_iowait_lists)
+    def processdata(self, line):
 
         if self.state == ACTIVE or self.state == LAST_RECORD:
 
             try:
                 type_name, dev_name, rest = line.split(None, 2)
-            except ValueError as e:
+            except ValueError:
                 self.error("syntax error on file '%s' line %s", self.filename, self.fileline)
                 return
 
@@ -369,19 +387,16 @@ class SimpleTaccParser(object):
             if not schema:
                 if not type_name in self.mismatch_schemas:
                     self.error("file `%s', unknown type `%s', discarding line `%s'",
-                        self.filename, type_name, self.fileline)
+                               self.filename, type_name, self.fileline)
                 return
 
             vals = numpy.fromstring(rest, dtype=numpy.uint64, sep=' ')
             if vals.shape[0] != len(schema):
-                self.error("file `%s', type `%s', expected %d values, read %d, discarding line `%s'",
-                       self.filename, type_name, len(schema), vals.shape[0], self.fileline)
+                self.error("file `%s', type `%s', expected %d values, read %d, discarding line `%s'", self.filename, type_name, len(schema), vals.shape[0], self.fileline)
                 return
 
-            type_stats = self.raw_stats.setdefault(type_name, {})
-            dev_stats = type_stats.setdefault(dev_name, [])
-
-            #Checks the numpy array for necessary values and puts them in a dict_of_iowait_lists for further processing
+            #Checks the numpy array for necessary values and puts them in a
+            #dict_of_iowait_lists for further processing
 
             matching_key_check = 'cpu%s' % (dev_name)
             if type_name == "cpu":
@@ -390,44 +405,50 @@ class SimpleTaccParser(object):
                     key = 'cpu%s' % (dev_name)
                     self.dict_of_iowait_lists[key].append(iowait_val)
 
-# Writes inputed dictionary into a text file. Called by read_all_gz_files
 
     def write_dict_to_txt(self, any_dict):
+        """
+        Writes inputed dictionary into a text file. Called by
+        read_all_gz_files
+        """
         if not os.path.exists('dict_data.txt'):
             os.mknod("dict_data.txt")
             print 'New file \'dict_data\' created'
-        with open('dict_data.txt', 'r+') as f:
+        with open('dict_data.txt', 'a') as afile:
             for filename, onelist in sorted(any_dict.items()):
                 easier_read_format = '%s ---> %s' % (filename, onelist)
-                f.write(easier_read_format)
-                f.write('\n')
-
-#Getter for dict_of_iowait_lists, used in read_all_gz_files to provide a parameter for check_lists_for_discrepencies
+                afile.write(easier_read_format)
+                afile.write('\n')
 
     @property
     def get_dict_of_iowait_lists(self):
+        """
+        Getter for dict_of_iowait_lists, used in read_all_gz_files to provide
+        a parameter for check_lists_for_discrepencies
+        """
         return self.dict_of_iowait_lists
 
-#Setter for dict_of_iowait_lists, used to reset the dictionary when a new file is reached
-
     def set_dict_of_iowait_lists(self, newval):
+        """
+        Setter for dict_of_iowait_lists, used to reset the dictionary when a
+        new file is reached
+        """
         self.dict_of_iowait_lists = newval
 
-    def processschema(self,line):
+
+    @staticmethod
+    def processschema():
         print "processschema"
-        pass
 
-    def processproperty(self,line):
+    @staticmethod
+    def processproperty():
         print "processproperty"
-        pass
 
-
-    def processmark(self,line):
+    def processmark(self, line):
         mark = line[1:].strip()
         actions = mark.split()
         if not actions:
-            self.error("syntax error priocessmark file `%s' line `%s'",
-            self.filename, self.fileline)
+            self.error("syntax error processmark file `%s' line `%s'", self.filename, self.fileline)
             return
         if actions[0] == "end":
 
@@ -444,26 +465,14 @@ class SimpleTaccParser(object):
             # procdump information is valid even when in active ignore
             if (self.state == ACTIVE or self.state == ACTIVE_IGNORE) and self.procdump != None:
                 self.procdump.parse(line)
-        pass
-
-
-
-#Generates a new dictionary, used to create a new dictionary for each file in a directory
-
-def gen_new_dict():
-    new_dict = {
-        'cpu0': [], 'cpu1': [], 'cpu2': [], 'cpu3': [], 'cpu4': [],
-        'cpu5': [], 'cpu6': [], 'cpu7': [], 'cpu8': [], 'cpu9': [], 'cpu10': [],
-        'cpu11': [], 'cpu12': [], 'cpu13': [], 'cpu14': [], 'cpu15': []
-        }
-    return new_dict
-
-#Reads all '.gz' files in a given directory. check_lists_for_discrepencies and write_dict_to_txt are called here
 
 def read_all_gz_files(path):
+    """
+    Reads all '.gz' files in a given directory. check_lists_for_discrepencies
+    and write_dict_to_txt are called here
+    """
     filecount = 0
     list_of_gz_files = []
-    test_dict = {}
 
     for gz_file in os.listdir(path):
         if gz_file.endswith('.gz'):
@@ -472,27 +481,31 @@ def read_all_gz_files(path):
     if len(list_of_gz_files) != 0:
         for afile in list_of_gz_files:
             fullpath = os.path.join(path, afile)
-            with gzip.open(fullpath) as fp:
-                STP = SimpleTaccParser()
+            with gzip.open(fullpath) as filepath:
+                stp = SimpleTaccParser()
                 filecount += 1
-                STP.read_stats_file(fp)
-                checker = STP.check_lists_for_discrepencies(STP.get_dict_of_iowait_lists, afile)
-
+                stp.read_stats_file(filepath)
+                checker = stp.check_lists_for_discrepencies(stp.get_dict_of_iowait_lists, afile)
+                stp.write_dict_to_txt(checker)
+                extracter = stp.extract_last_list_val(stp.get_dict_of_iowait_lists)
+                stp.append_last_vals(extracter, stp.get_dict_of_iowait_lists)
         print 'Successfully read all %s files in directory' % (filecount)
-
     else:
         print 'No \'.gz\' files in %s' % (path)
 
 
-#Main method takes in as many file arguments as necessary and checks each directory's files for errors. Handles if file path is invalid.
 
 def main():
+    """
+    Main method takes in as many file arguments as necessary and checks each
+    directory's files for errors. Handles if file path is invalid.
+    """
     logging.basicConfig(format='%(asctime)s [%(levelname)s] %(message)s',
                         datefmt='%Y-%m-%dT%H:%M:%S',
                         level=logging.DEBUG)
     file_names = sys.argv[1:]
     if len(file_names) == 0:
-        print 'Please input the directory that holds \'.gz\' files'
+        print 'Please input a directory that holds \'.gz\' files'
     else:
         try:
             for name in file_names:
