@@ -4,8 +4,12 @@ import logging
 import string
 import os
 import sys
+import datetime
+import time
 import numpy
 
+
+dict_of_last_vals = {}
 SF_SCHEMA_CHAR = '!'
 SF_DEVICES_CHAR = '@'
 SF_COMMENT_CHAR = '#'
@@ -194,7 +198,6 @@ class Schema(dict):
     def values(self):
         return self._value_list
 
-
 class SimpleTaccParser(object):
     """Takes Taccstats logs files and  """
 
@@ -202,6 +205,16 @@ class SimpleTaccParser(object):
 
         self.procdump = None
         self.file_schemas = {}
+
+        self.cpu_total_prev = 0
+        self.flag_reboot = False
+
+        self.dict_of_cpu_totals = {
+            'cpu0': [], 'cpu1': [], 'cpu2': [], 'cpu3': [], 'cpu4': [],
+            'cpu5': [], 'cpu6': [], 'cpu7': [], 'cpu8': [], 'cpu9': [],
+            'cpu10': [], 'cpu11': [], 'cpu12': [], 'cpu13': [], 'cpu14': [],
+            'cpu15': []
+        }
 
         #self.error_dict holds the filename as well as a list of lists that
         #contain the cpu affected and timestamp
@@ -336,43 +349,66 @@ class SimpleTaccParser(object):
             return
 
     def check_lists_for_discrepencies(self, any_dict, filename):
+
         """
         Checks the specified dictionary containing iowait numbers for
         inconsistencies, specificially drops in iowait values. Inconsistencies
         are added to a new dictionary with the file name as a key and the values
         being a list of lists containing the cpu number and timestamp
         """
-        counter = 0
-        extracted = self.extract_last_list_val(any_dict)
-        logging.debug(extracted)
-        for dict_tuple in any_dict.items():
-            iowait_nums = dict_tuple[1]
-            for num in iowait_nums:
-                counter += 1
-                if counter < len(iowait_nums) and num > iowait_nums[counter]:
-                    logging.error('Error with %s iowait numbers for list %s, %s decreased to %s', filename, dict_tuple[0], num, iowait_nums[counter])
-                    if filename not in self.error_dict:
-                        self.error_dict[filename] = []
-                    self.error_dict[filename].append([dict_tuple[0], self.timestamp])
-                if counter == len(iowait_nums):
-                    counter = 0
 
+        counter = 0
+        if self.flag_reboot == False:
+            for dict_tuple in any_dict.items():
+                iowait_nums = dict_tuple[1]
+                for num in iowait_nums:
+                    counter += 1
+                    if counter < len(iowait_nums) and num > iowait_nums[counter]:
+                        logging.error('Error with %s iowait numbers for list %s, %s decreased to %s', filename, dict_tuple[0], num, iowait_nums[counter])
+                        if filename not in self.error_dict:
+                            self.error_dict[filename] = []
+                        self.error_dict[filename].append([dict_tuple[0], self.timestamp])
+                    if counter == len(iowait_nums):
+                        counter = 0
+        elif self.flag_reboot == True:
+            logging.debug('Reboot detected for file %s', filename)
+            self.flag_reboot = False
         return self.error_dict
 
+    def check_for_reboot(self, any_dict):
+        for dict_tuple in any_dict.items():
+            cpu_sums = dict_tuple[1]
+            if len(cpu_sums) == 2:
+                if cpu_sums[0] > cpu_sums[1]:
+                    self.flag_reboot = True
+                cpu_sums.remove(cpu_sums[0])
+
     def extract_last_list_val(self, any_dict):
+
+        """
+        Takes the last iowait values from the current instance for each cpu and
+        returns a list of those values in order to read all files as a
+        contiguous block
+        """
+
         list_of_last_vals = []
         for value in any_dict.values():
-            if value[-1] not in list_of_last_vals:
-                list_of_last_vals.append(value[-1])
+            list_of_last_vals.append(value[-1])
+            #logging.debug(list_of_last_vals)
         return list_of_last_vals
 
     def append_last_vals(self, a_list, any_dict):
+
+        """
+        Takes in a list and dictionary and inserts a value from a_list at an
+        incrementing index into any_dict, one value for each key
+        """
+
         indexer = 0
-        for key in any_dict.keys():
+        for key in any_dict:
             any_dict[key].insert(0, a_list[indexer])
             indexer += 1
 
-        logging.debug(self.dict_of_iowait_lists)
     def processdata(self, line):
 
         if self.state == ACTIVE or self.state == LAST_RECORD:
@@ -395,30 +431,22 @@ class SimpleTaccParser(object):
                 self.error("file `%s', type `%s', expected %d values, read %d, discarding line `%s'", self.filename, type_name, len(schema), vals.shape[0], self.fileline)
                 return
 
-            #Checks the numpy array for necessary values and puts them in a
-            #dict_of_iowait_lists for further processing
+            #Checks the numpy array vals for necessary values and puts them in a
+            #dictionary named dict_of_iowait_lists for further processing
 
             matching_key_check = 'cpu%s' % (dev_name)
+            get_schema = self.get_schema(type_name)
             if type_name == "cpu":
+                cpu_timings = vals[[get_schema['nice'].index,
+                get_schema['system'].index, get_schema['idle'].index,
+                get_schema['iowait'].index, get_schema['irq'].index,
+                get_schema['softirq'].index]]
+                cpu_total = int(numpy.sum(cpu_timings))
+                self.dict_of_cpu_totals[matching_key_check].append(cpu_total)
+                self.check_for_reboot(self.dict_of_cpu_totals)
                 iowait_val = vals[self.get_schema(type_name)['iowait'].index]
-                if matching_key_check in self.dict_of_iowait_lists.keys():
-                    key = 'cpu%s' % (dev_name)
-                    self.dict_of_iowait_lists[key].append(iowait_val)
+                self.dict_of_iowait_lists[matching_key_check].append(iowait_val)
 
-
-    def write_dict_to_txt(self, any_dict):
-        """
-        Writes inputed dictionary into a text file. Called by
-        read_all_gz_files
-        """
-        if not os.path.exists('dict_data.txt'):
-            os.mknod("dict_data.txt")
-            print 'New file \'dict_data\' created'
-        with open('dict_data.txt', 'a') as afile:
-            for filename, onelist in sorted(any_dict.items()):
-                easier_read_format = '%s ---> %s' % (filename, onelist)
-                afile.write(easier_read_format)
-                afile.write('\n')
 
     @property
     def get_dict_of_iowait_lists(self):
@@ -466,34 +494,67 @@ class SimpleTaccParser(object):
             if (self.state == ACTIVE or self.state == ACTIVE_IGNORE) and self.procdump != None:
                 self.procdump.parse(line)
 
+def write_dict_to_txt(any_dict, filename):
+
+    """
+    Writes inputed dictionary into a text file. Used to write errors to a file.
+    """
+
+    if not os.path.exists('dict_data.txt'):
+        os.mknod('dict_data.txt')
+    if not os.path.exists('reboot_data.txt'):
+        os.mknod('reboot_data.txt')
+    with open('dict_data.txt', 'a') as afile:
+        for filename, onelist in sorted(any_dict.items()):
+            easier_read_format = '%s ---> %s' % (filename, onelist)
+            afile.write(easier_read_format)
+            afile.write('\n')
+    with open('reboot_data.txt', 'a') as rfile:
+        reboot_txt = 'Reboot for file %s' % (filename)
+        rfile.write(reboot_txt)
+        rfile.write('\n')
+
 def read_all_gz_files(path):
     """
-    Reads all '.gz' files in a given directory. check_lists_for_discrepencies
-    and write_dict_to_txt are called here
+    Reads all '.gz' files in a given directory and checks subfolders. Checks all
+    tacc stats files for errors and writes them to a file.
     """
+    instance_count = 0
     filecount = 0
     list_of_gz_files = []
 
-    for gz_file in os.listdir(path):
-        if gz_file.endswith('.gz'):
-            list_of_gz_files.append(gz_file)
+    #Collects all files in a directory into a list to sort
+
+    list_of_gz_files = list_of_files_in_directory(path)
 
     if len(list_of_gz_files) != 0:
-        for afile in list_of_gz_files:
-            fullpath = os.path.join(path, afile)
-            with gzip.open(fullpath) as filepath:
-                stp = SimpleTaccParser()
+        for afile in sorted(list_of_gz_files):
+            with gzip.open(afile) as filepath:
                 filecount += 1
+                stp = SimpleTaccParser()
                 stp.read_stats_file(filepath)
                 checker = stp.check_lists_for_discrepencies(stp.get_dict_of_iowait_lists, afile)
-                stp.write_dict_to_txt(checker)
+                write_dict_to_txt(checker, afile)
                 extracter = stp.extract_last_list_val(stp.get_dict_of_iowait_lists)
-                stp.append_last_vals(extracter, stp.get_dict_of_iowait_lists)
+                if instance_count > 0:
+                    stp.append_last_vals(last_instance, stp.get_dict_of_iowait_lists)
+                    logging.debug(stp.get_dict_of_iowait_lists)
+                    last_instance = extracter
+                else:
+                    logging.debug(stp.get_dict_of_iowait_lists)
+                    last_instance = extracter
+                    instance_count = 1
         print 'Successfully read all %s files in directory' % (filecount)
     else:
         print 'No \'.gz\' files in %s' % (path)
 
-
+def list_of_files_in_directory(source):
+    match = []
+    for root, dirnames, filenames in os.walk(source):
+        for filename in filenames:
+            if filename.endswith('.gz'):
+                match.append(os.path.join(root, filename))
+    return match
 
 def main():
     """
@@ -508,11 +569,10 @@ def main():
         print 'Please input a directory that holds \'.gz\' files'
     else:
         try:
-            for name in file_names:
-                print 'Reading files from directory: %s' % (name)
-                read_all_gz_files(name)
-        except OSError:
-            print 'Oops %s doesn\'t appear to be a valid file path!' % (name)
+                print 'Reading files from directory: %s' % (sys.argv[1])
+                read_all_gz_files(sys.argv[1])
+        except OSError as e:
+            print '%s: Oops %s doesn\'t appear to be a valid file path!' % (e, sys.argv[1])
 
 if __name__ == "__main__":
     main()
