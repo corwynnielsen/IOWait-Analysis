@@ -4,6 +4,8 @@ import logging
 import string
 import os
 import sys
+import time
+import datetime
 import numpy
 
 SF_SCHEMA_CHAR = '!'
@@ -206,28 +208,29 @@ class SimpleTaccParser(object):
         self.procdump = None
         self.file_schemas = {}
 
-        self.flag_reboot = 0
+        self.slice_count = 0
 
-        self.dict_of_cpu_totals = {
-            'cpu0': [], 'cpu1': [], 'cpu2': [], 'cpu3': [], 'cpu4': [],
-            'cpu5': [], 'cpu6': [], 'cpu7': [], 'cpu8': [], 'cpu9': [],
-            'cpu10': [], 'cpu11': [], 'cpu12': [], 'cpu13': [], 'cpu14': [],
-            'cpu15': []
-        }
+        self.reboot_flag = False
+        self.device_reboot_counter = 0
+
+        #holds the total timings on each device, used to find reboots
+
+        self.dict_of_cpu_total_timings = {}
 
         #self.error_dict holds the filename as well as a list of lists that
         #contain the cpu affected and timestamp
         self.error_dict = {}
 
         #self.dict_of_iowait_lists holds the values of each iowait value for
-        #each cpu, clears after file ends
-        self.dict_of_iowait_lists = {
-            'cpu0': [], 'cpu1': [], 'cpu2': [], 'cpu3': [], 'cpu4': [],
-            'cpu5': [], 'cpu6': [], 'cpu7': [], 'cpu8': [], 'cpu9': [],
-            'cpu10': [], 'cpu11': [], 'cpu12': [], 'cpu13': [], 'cpu14': [],
-            'cpu15': []
-        }
-        self.times = []
+        #each cpu
+
+        self.dict_of_iowait_lists = {}
+
+        self.last_cpu_totals = []
+
+        self.list_of_timestamps = []
+
+        self.extract_first_cpu_totals_counter = 0
         self.raw_stats = {}
         self.marks = {}
         self.rotatetimes = []
@@ -245,12 +248,12 @@ class SimpleTaccParser(object):
 
     def trace(self, fmt, *args):
         #pylint: disable = W1201
-        #pylint incorrectly recognizing logging formatting
+        #pylint incorrectly recognizing logging formatting error
         logging.debug(fmt % args)
 
     def error(self, fmt, *args):
         #pylint: disable = W1201
-        #pylint incorrectly recognizing logging formatting
+        #pylint incorrectly recognizing logging formatting error
         logging.error(fmt % args)
 
     def get_schema(self, type_name, desc=None):
@@ -318,6 +321,7 @@ class SimpleTaccParser(object):
 
 
     def parse(self, line):
+
         if len(line) < 1:
             return
 
@@ -359,19 +363,21 @@ class SimpleTaccParser(object):
         being a list of lists containing the cpu number and timestamp
         """
 
+        self.extract_last_cpu_totals(self.dict_of_cpu_total_timings)
+
         counter = 0
-        if self.flag_reboot > 1:
-            for dict_tuple in any_dict.items():
-                iowait_nums = dict_tuple[1]
-                for num in iowait_nums:
-                    counter += 1
-                    if counter < len(iowait_nums) and num > iowait_nums[counter]:
-                        logging.error('Error with %s iowait numbers for %s, %s decreased to %s at %f', filename, dict_tuple[0], num, iowait_nums[counter], self.timestamp)
-                        if filename not in self.error_dict:
-                            self.error_dict[filename] = []
-                        self.error_dict[filename].append([dict_tuple[0], self.timestamp])
-                    if counter == len(iowait_nums):
-                        counter = 0
+        for dict_tuple in any_dict.items():
+            iowait_nums = dict_tuple[1]
+            for num in iowait_nums:
+                counter += 1
+                if counter < len(iowait_nums) and num > iowait_nums[counter] and num is not 'flagged':
+                    logging.error('Error with %s iowait numbers for %s, %s decreased to %s at %f', filename, dict_tuple[0], num, iowait_nums[counter], self.list_of_timestamps[counter-1])
+                    if filename not in self.error_dict:
+                        self.error_dict[filename] = []
+                    timestamp = self.list_of_timestamps[counter-1]
+                    self.error_dict[filename].append([dict_tuple[0], timestamp])
+                if counter == len(iowait_nums):
+                    counter = 0
         return self.error_dict
 
     def check_for_reboot(self, any_dict):
@@ -385,15 +391,27 @@ class SimpleTaccParser(object):
             cpu_sums = dict_tuple[1]
             if len(cpu_sums) == 2:
                 if cpu_sums[0] > cpu_sums[1]:
-                    logging.debug(dict_tuple[1])
-                    self.flag_reboot += 1
-                    logging.debug('Cpu counter %s', self.flag_reboot)
+                    self.device_reboot_counter += 1
+                    self.reboot_flag = True
                 cpu_sums.remove(cpu_sums[0])
-            if self.flag_reboot is 16:
-                reboot_info = 'Reboot at %s for %s' % (self.timestamp, self.filename)
-                write_reboot_to_txt(reboot_info)
-                self.flag_reboot = 1
-                
+            if self.device_reboot_counter is 16:
+                reboot_info = 'Reboot at %f for %s' % (self.timestamp, self.filename)
+                logging.debug(reboot_info)
+                write_reboot_data_to_txt(reboot_info)
+                self.device_reboot_counter = 0
+
+    def extract_last_cpu_totals(self, cpu_timings_dict):
+
+        """
+        Takes slices from the inputed numpy array, the amount of slices
+        taken depends on the length of dict_of_iowait_lists which represents
+        device count
+        """
+
+        for key in cpu_timings_dict:
+            logging.debug('Key %s Val %s', key, cpu_timings_dict[key])
+            self.last_cpu_totals.append(cpu_timings_dict[key][0])
+
     def processdata(self, line):
 
         """
@@ -428,17 +446,32 @@ class SimpleTaccParser(object):
 
             device_name = 'cpu%s' % (dev_name)
             get_schema = self.get_schema(type_name)
+
             if type_name == "cpu":
+
+                if self.timestamp not in self.list_of_timestamps:
+                    self.list_of_timestamps.append(self.timestamp)
+
+                if device_name not in self.dict_of_iowait_lists:
+                    self.dict_of_iowait_lists[device_name] = []
+                    self.dict_of_cpu_total_timings[device_name] = []
+
                 cpu_timings = vals[[get_schema['nice'].index,
                 get_schema['system'].index, get_schema['idle'].index,
                 get_schema['iowait'].index, get_schema['irq'].index,
                 get_schema['softirq'].index]]
                 cpu_total = int(numpy.sum(cpu_timings))
-                self.dict_of_cpu_totals[device_name].append(cpu_total)
-                self.check_for_reboot(self.dict_of_cpu_totals)
-                iowait_val = vals[self.get_schema(type_name)['iowait'].index]
-                self.dict_of_iowait_lists[device_name].append(iowait_val)
 
+                self.dict_of_cpu_total_timings[device_name].append(cpu_total)
+                self.check_for_reboot(self.dict_of_cpu_total_timings)
+                iowait_val = vals[self.get_schema(type_name)['iowait'].index]
+
+                if self.reboot_flag:
+                    self.dict_of_iowait_lists[device_name].append('flagged')
+                    self.reboot_flag = False
+
+                else:
+                    self.dict_of_iowait_lists[device_name].append(iowait_val)
 
     @property
     def get_dict_of_iowait_lists(self):
@@ -449,6 +482,22 @@ class SimpleTaccParser(object):
         """
 
         return self.dict_of_iowait_lists
+
+    @property
+    def get_dict_of_cpu_total_timings(self):
+
+        """
+        """
+
+        return self.dict_of_cpu_total_timings
+
+    @property
+    def get_last_cpu_totals(self):
+
+        """
+        """
+
+        return self.last_cpu_totals
 
     @staticmethod
     def processschema():
@@ -500,29 +549,42 @@ def append_last_vals(a_list, any_dict):
     incrementing index into any_dict, one value for each key
     """
 
-    indexer = 0
+    incrementer = 0
     for key in any_dict:
-        any_dict[key].insert(0, a_list[indexer])
-        indexer += 1
+        any_dict[key].insert(0, a_list[incrementer])
+        incrementer += 1
 
-def write_reboot_to_txt(reboot_info):
-    if not os.path.exists('dict_data.txt'):
-        os.mknod('dict_data.txt')
+def gen_timestamped_txt(text_type):
+
+    """
+    Creates a file
+    """
+
+    timestamp = datetime.datetime.now().strftime('%Y-%m-%d_%H:%M:%S')
+    full_filename = '%s_%s.txt' % (text_type, timestamp)
+    os.mknod(full_filename)
+    return full_filename
+
+def write_reboot_data_to_txt(reboot_info):
+
+    """
+    Takes in the string from check_for_reboot and appends it into a file named
+    'reboot_data', logs reboot data.
+    """
+
     with open('reboot_data.txt', 'a') as rfile:
         rfile.write(reboot_info)
         rfile.write('\n')
 
-def write_dict_to_txt(any_dict, filename):
+def write_dict_to_txt(any_dict, gz_filename, dict_text_filename):
 
     """
     Writes inputed dictionary into a text file. Used to write errors to a file.
     """
 
-    if not os.path.exists('reboot_data.txt'):
-        os.mknod('reboot_data.txt')
-    with open('dict_data.txt', 'a') as afile:
+    with open(dict_text_filename, 'a') as afile:
         for filename, onelist in sorted(any_dict.items()):
-            easier_read_format = '%s ---> %s' % (filename, onelist)
+            easier_read_format = '%s ---> %s' % (gz_filename, onelist)
             afile.write(easier_read_format)
             afile.write('\n')
 
@@ -533,39 +595,39 @@ def read_all_gz_files(path):
     tacc stats files for errors and writes them to a file.
     """
 
-    instance_count = 0
     filecount = 0
+    # txt_filename = gen_timestamped_txt('dict_text')
     list_of_gz_files = []
-
+    start_time = time.time()
+    iowait_last_instance = None
+    reboot_last_instance = None
     #Collects all files in a directory into a list to sort
 
-    list_of_gz_files = list_of_files_in_directory(path)
+    list_of_gz_files = get_list_of_files_in_directory(path)
 
     if len(list_of_gz_files) != 0:
         for afile in sorted(list_of_gz_files):
+            logging.debug(afile)
             with gzip.open(afile) as filepath:
                 filecount += 1
                 stp = SimpleTaccParser()
                 stp.read_stats_file(filepath)
+                if iowait_last_instance is not None:
+                    append_last_vals(reboot_last_instance, stp.get_dict_of_cpu_total_timings)
+                    append_last_vals(iowait_last_instance, stp.get_dict_of_iowait_lists)
+                    iowait_last_instance = iowait_extracter
+                    reboot_last_instance = stp.get_last_cpu_totals
                 checker = stp.check_lists_for_discrepencies(stp.get_dict_of_iowait_lists, afile)
-                write_dict_to_txt(checker, afile)
-                extracter = extract_last_list_val(stp.get_dict_of_iowait_lists)
-
-                #pylint: disable = E0601
-                #Error says last_instance is accessed before assignment, but
-                #cannot be accessed until instance_count>1 so it is irrelevent
-                #necessary for append_last_vals to append properly
-
-                if instance_count > 0:
-                    append_last_vals(last_instance, stp.get_dict_of_iowait_lists)
-                    last_instance = extracter
-                instance_count = 1
-                last_instance = extracter
-        print 'Successfully read all %s files in directory' % (filecount)
+                # write_dict_to_txt(checker, afile, txt_filename)
+                iowait_extracter = extract_last_list_val(stp.get_dict_of_iowait_lists)
+                iowait_last_instance = iowait_extracter
+                reboot_last_instance = stp.get_last_cpu_totals
+                logging.debug(reboot_last_instance)
+        print 'Read all %s files in directory in %d seconds' % (filecount, time.time() - start_time)
     else:
         print 'No \'.gz\' files in %s' % (path)
 
-def list_of_files_in_directory(source):
+def get_list_of_files_in_directory(source):
 
     """
     Walks the file structure and finds all files ending with .gz which are then
