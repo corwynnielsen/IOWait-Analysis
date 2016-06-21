@@ -201,7 +201,15 @@ class Schema(dict):
 
 
 class SimpleTaccParser(object):
-    """Takes Taccstats logs files and  """
+    """
+    Takes tacc stats log files and parses them using read_stats_file_header,
+    read_stats_file, and parse. After parsing, the iowait data is inspected for
+    drops. If a drop is found, the drop is documented to a file with a
+    timestamp. Reboots with not be falsely represented as errors and are instead
+    logged to their own file with a timestamp. Reboots are found by adding all
+    cpu timings together and comparing the current sum to the previous and
+    checking for drops with each device.
+    """
 
     def __init__(self):
 
@@ -230,7 +238,6 @@ class SimpleTaccParser(object):
 
         self.list_of_timestamps = []
 
-        self.extract_first_cpu_totals_counter = 0
         self.raw_stats = {}
         self.marks = {}
         self.rotatetimes = []
@@ -306,9 +313,9 @@ class SimpleTaccParser(object):
 
         self.file_schemas = self.read_stats_file_header(filepath)
 
-        if not self.file_schemas:
-            self.error("file `%s' bad header on line %s", self.filename, self.fileline)
-            return
+        # if not self.file_schemas:
+        #     self.error("file `%s' bad header on line %s", self.filename, self.fileline)
+        #     return
 
         try:
             for line in filepath:
@@ -321,6 +328,12 @@ class SimpleTaccParser(object):
 
 
     def parse(self, line):
+
+        """
+        Reads the tacc stats data file line by line, dealing with each
+        character as they come. If the character is unrecognized, an error is
+        thrown
+        """
 
         if len(line) < 1:
             return
@@ -342,11 +355,20 @@ class SimpleTaccParser(object):
                             char, self.filename, self.fileline)
 
     def setstate(self, newstate, reason=None):
+
+        """
+        Alters the state machine in the class
+        """
+
         self.trace("TRANS {} -> {} ({})".format(STATENAMES[self.state], STATENAMES[newstate], reason))
         self.state = newstate
 
     def processtimestamp(self, line):
-        """ process the timestamp """
+
+        """
+        process the timestamp
+        """
+
         recs = line.strip().split(" ")
         try:
             self.timestamp = float(recs[0])
@@ -357,10 +379,10 @@ class SimpleTaccParser(object):
     def check_lists_for_discrepencies(self, any_dict, filename):
 
         """
-        Checks the specified dictionary containing iowait numbers for
-        inconsistencies, specificially drops in iowait values. Inconsistencies
-        are added to a new dictionary with the file name as a key and the values
-        being a list of lists containing the cpu number and timestamp
+        Checks the specified dictionary containing iowait numbers for drops in
+        iowait values. Unless a reboot is detected, inconsistencies are added to
+        a new dictionary with the file name as a key and the values being a list
+        of lists containing the cpu number and timestamp.
         """
 
         self.extract_last_cpu_totals(self.dict_of_cpu_total_timings)
@@ -384,7 +406,9 @@ class SimpleTaccParser(object):
 
         """
         Checks if the previous total cpu total is greater than the current, if
-        that is true, flag_reboot is set to true. The value at 0 is removed.
+        that is true, flag_reboot is set to true. The value at 0 in cpu_sums is
+        removed. If all devices are found to have rebooted, a timestamp and
+        filename is written to a file for logging purposes.
         """
 
         for dict_tuple in any_dict.items():
@@ -418,7 +442,8 @@ class SimpleTaccParser(object):
         Takes in lines from tacc stats files and puts all of the data into a
         numpy array. Handles various schema related errors. This method also
         stores iowait values and cpu total timings into two different
-        dictionaries while checking for reboots.
+        dictionaries while checking for reboots and flagging reboots when
+        a condition is fulfilled.
         """
 
         if self.state == ACTIVE or self.state == LAST_RECORD:
@@ -487,6 +512,9 @@ class SimpleTaccParser(object):
     def get_dict_of_cpu_total_timings(self):
 
         """
+        Getter for dict_of_cpu_total_timings, used to append last_cpu_totals
+        into dict_of_cpu_total_timings to detect reboots across files, not sure
+        if necessary yet as the appending is not working
         """
 
         return self.dict_of_cpu_total_timings
@@ -495,6 +523,9 @@ class SimpleTaccParser(object):
     def get_last_cpu_totals(self):
 
         """
+        Getter for last_cpu_totals, each value is appended into
+        dict_of_cpu_total_timings to detect reboots across files, not sure if
+        necessary yet as the appending is not working
         """
 
         return self.last_cpu_totals
@@ -557,7 +588,7 @@ def append_last_vals(a_list, any_dict):
 def gen_timestamped_txt(text_type):
 
     """
-    Creates a file
+    Creates a file whos name is timestamped
     """
 
     timestamp = datetime.datetime.now().strftime('%Y-%m-%d_%H:%M:%S')
@@ -584,7 +615,7 @@ def write_dict_to_txt(any_dict, gz_filename, dict_text_filename):
 
     with open(dict_text_filename, 'a') as afile:
         for filename, onelist in sorted(any_dict.items()):
-            easier_read_format = '%s ---> %s' % (gz_filename, onelist)
+            easier_read_format = '%s ---> %s' % (filename, onelist)
             afile.write(easier_read_format)
             afile.write('\n')
 
@@ -601,6 +632,7 @@ def read_all_gz_files(path):
     start_time = time.time()
     iowait_last_instance = None
     reboot_last_instance = None
+    iowait_extracter = None
     #Collects all files in a directory into a list to sort
 
     list_of_gz_files = get_list_of_files_in_directory(path)
