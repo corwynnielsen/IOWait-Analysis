@@ -216,16 +216,13 @@ class Schema(dict):
         return self._value_list
 
 
-class RebootData(object):
+class Maintain_State(object):
 
     """
-    Used to store data in between instances of the SimpleTaccParser,
-    specifically for detecting a reboot between files. The list
-    self.last_cpu_total_vals, which are the last sums of the cpu timings, is
-    stored here. Unless the file is the first in the directory, which is
-    checked using self.not_first_file, those values are then appended into the
-    new self.dict_of_cpu_total_timings that is empty upon instantiation of
-    SimpleTaccParser. Also handles storing the reboot data text file's file
+    Used to store data in between instances of the SimpleTaccParser. The list
+    self.last_cpu_total_vals stores the total cpu timings. self.not_first_file
+    stires a boolean value, used in checking if the file is the first in
+    directory. Also handles storing the reboot data text file's file
     name and ensuring only one file is made via the boolean self.file_created
     """
 
@@ -233,7 +230,10 @@ class RebootData(object):
         self.last_cpu_total_vals = []
         self.not_first_file = False
         self.file_created = False
-        self.reboot_data_filename = None
+        self.previous_timestamp = 0
+        self.reboot_data_filename = ""
+        self.previous_filename = ""
+        self.time_gap_data = ""
 
     def set_last_cpu_total_vals(self, a_list):
 
@@ -272,7 +272,34 @@ class RebootData(object):
 
         self.file_created = new_bool
 
-STORE_REBOOT_DATA = RebootData()
+    def set_previous_timestamp(self, new_timestamp):
+
+        """
+        Mutates the instance variable self.previous_timestamp, used to store a
+        previous timestamp to check for gaps in time between files
+        """
+
+        self.previous_timestamp = new_timestamp
+
+    def set_previous_filename(self, new_filename):
+
+        """
+        Mutates the instance variable self.previous_filename, used to store a
+        previous filename for logging purposes
+        """
+
+        self.previous_filename = new_filename
+
+    def set_time_gap_data(self, gap_data):
+
+        """
+        Mutates the isntance variable self.time_gap_data, this string holds all
+        the useful data to be logged
+        """
+
+        self.time_gap_data = gap_data
+
+MAINTAIN_STATE = Maintain_State()
 # global variable so the values stored can be
 # acessed throughout the whole reading files process
 # Possibly should be changed to be a class var?
@@ -298,7 +325,7 @@ class SimpleTaccParser(object):
         self.file_schemas = {}
 
         self.file_created = False
-        self.reboot_flag = False # used to prevent check_lists_for_discrepencies from incorrectly reporting errors
+        self.reboot_flag = False  # used to prevent check_lists_for_discrepencies from incorrectly reporting errors
         self.device_potential_reboot_counter = 0
 
         self.dict_of_cpu_total_timings = {}  # holds the total timings on each device, used to find reboots
@@ -310,14 +337,13 @@ class SimpleTaccParser(object):
 
         self.last_cpu_totals = []
 
-        self.list_of_timestamps = [] #stores timestamp for use in check_lists_for_discrepencies
+        self.list_of_timestamps = []  # stores timestamp for use in check_lists_for_discrepencies
 
         self.counter = 0
         self.raw_stats = {}
         self.marks = {}
         self.rotatetimes = []
 
-        self.call_counter = 0
         self.state = ACTIVE
         self.hostname = None
         self.timestamp = None
@@ -465,22 +491,27 @@ class SimpleTaccParser(object):
         """
 
         self.extract_last_cpu_totals(self.dict_of_cpu_total_timings)
+        if MAINTAIN_STATE.not_first_file:
+            time_gap_data = self.check_for_time_gap_between_files(self.list_of_timestamps[0], MAINTAIN_STATE.previous_timestamp, 600, MAINTAIN_STATE.previous_filename)
+            MAINTAIN_STATE.set_time_gap_data(time_gap_data)
+        MAINTAIN_STATE.set_previous_timestamp(self.timestamp)
+        MAINTAIN_STATE.set_previous_filename(self.filename)
 
         counter = 0
         for dict_tuple in any_dict.items():
             iowait_nums = dict_tuple[1]
             for num in iowait_nums:
                 counter += 1
-                if counter < len(iowait_nums) and num > iowait_nums[counter] \
-                   and num is not 'flagged':
+                if counter < len(iowait_nums) and num > iowait_nums[counter] and num is not 'flagged':
+                    difference = int(num) - int(iowait_nums[counter])
+                    difference_string = 'iowait difference: %s' % (difference)
                     logging.error('Error with %s iowait numbers for %s, %s \
-decreased to %s at %f', filename, dict_tuple[0], num, iowait_nums[counter],
-                                  self.list_of_timestamps[counter-1])
+iowait value decrease at %f', filename, dict_tuple[0], difference, self.list_of_timestamps[counter-1])
                     if filename not in self.error_dict:
                         self.error_dict[filename] = []
                     timestamp = self.list_of_timestamps[counter-1]
-                    self.error_dict[filename].append([dict_tuple[0],
-                                                      timestamp])
+                    self.error_dict[filename].append((dict_tuple[0],
+                                                      timestamp, difference_string))
                 if counter == len(iowait_nums):
                     counter = 0
         return self.error_dict
@@ -502,21 +533,20 @@ decreased to %s at %f', filename, dict_tuple[0], num, iowait_nums[counter],
                     self.reboot_flag = True
                 cpu_sums.remove(cpu_sums[0])
             if self.device_potential_reboot_counter is 16:
-                if not STORE_REBOOT_DATA.file_created:
-                    STORE_REBOOT_DATA.set_reboot_data_filename(generate_timestamped_txt('reboot_data'))
-                    STORE_REBOOT_DATA.set_file_created(True)
+                if not MAINTAIN_STATE.file_created:
+                    MAINTAIN_STATE.set_reboot_data_filename(generate_timestamped_txt('reboot_data'))
+                    MAINTAIN_STATE.set_file_created(True)
                 reboot_info = 'Reboot at %f for %s' % (self.timestamp,
                                                        self.filename)
                 logging.debug(reboot_info)
-                write_reboot_data_to_txt(reboot_info, STORE_REBOOT_DATA.reboot_data_filename)
+                write_reboot_data_to_txt(reboot_info, MAINTAIN_STATE.reboot_data_filename)
                 self.device_potential_reboot_counter = 0
 
     def extract_last_cpu_totals(self, cpu_timings_dict):
 
         """
-        Takes slices from the inputed numpy array, the amount of slices
-        taken depends on the length of dict_of_iowait_lists which represents
-        device count
+        Takes values from the arg cpu_timings_dict and puts them into a list
+        for further processing and storage
         """
 
         self.last_cpu_totals = []
@@ -565,11 +595,12 @@ decreased to %s at %f', filename, dict_tuple[0], num, iowait_nums[counter],
                 if self.timestamp not in self.list_of_timestamps:
                     self.list_of_timestamps.append(self.timestamp)
 
-                if device_name not in self.dict_of_iowait_lists: #populates dictionaries with the necessary amount of keys
+                if device_name not in self.dict_of_iowait_lists:  # populates dictionaries with the necessary amount of keys
                     self.dict_of_iowait_lists[device_name] = []
                     self.dict_of_cpu_total_timings[device_name] = []
 
-                cpu_timings = vals[[get_schema['nice'].index,
+                cpu_timings = vals[[get_schema['user'].index,
+                                    get_schema['nice'].index,
                                     get_schema['system'].index,
                                     get_schema['idle'].index,
                                     get_schema['iowait'].index,
@@ -578,9 +609,9 @@ decreased to %s at %f', filename, dict_tuple[0], num, iowait_nums[counter],
 
                 cpu_total = int(numpy.sum(cpu_timings))
 
-                if STORE_REBOOT_DATA.not_first_file and self.counter < 16:
-                    self.dict_of_cpu_total_timings[device_name].append(STORE_REBOOT_DATA.last_cpu_total_vals[0])
-                    del STORE_REBOOT_DATA.last_cpu_total_vals[0]
+                if MAINTAIN_STATE.not_first_file and self.counter < 16:
+                    self.dict_of_cpu_total_timings[device_name].append(MAINTAIN_STATE.last_cpu_total_vals[0])
+                    del MAINTAIN_STATE.last_cpu_total_vals[0]
                     self.counter += 1
 
                 self.dict_of_cpu_total_timings[device_name].append(cpu_total)
@@ -593,6 +624,24 @@ decreased to %s at %f', filename, dict_tuple[0], num, iowait_nums[counter],
 
                 else:
                     self.dict_of_iowait_lists[device_name].append(iowait_val)
+
+    def check_for_time_gap_between_files(self, first_timestamp, previous_file_last_timestamp, time_gap, filename):
+
+        """
+        Takes in four arguments, previous_file_last_timestamp is the last
+        timestamp of the previous file, first_timestamp is the first timestamp
+        of the current file, time_gap is the amount of time that will be
+        allowed before an error is returned, and filename is used for logging
+        purposes. Used to tell if there is a certain gap in time between the
+        previous stats file and the current stats file and if that is the case,
+        a string used in logging is returned.
+        """
+
+        if MAINTAIN_STATE.previous_timestamp is not 0:
+            difference = int(first_timestamp) - int(previous_file_last_timestamp)
+            if difference > time_gap:
+                gap_in_minutes = int(difference / 60)
+                return "%s minute gap starting at %s for file %s" % (gap_in_minutes, MAINTAIN_STATE.previous_timestamp, filename)
 
     @property
     def get_dict_of_iowait_lists(self):
@@ -712,30 +761,26 @@ def write_reboot_data_to_txt(reboot_info, filename):
         rfile.write('\n')
 
 
-def write_dict_to_txt(any_dict, dict_text_filename, hostname_dict):
+def write_dict_to_txt(any_dict, dict_text_filename):
 
     """
     Writes inputed dictionary into a text file. Used to write errors to a file.
     """
 
-    with open(dict_text_filename, 'a') as afile:
+    with open(dict_text_filename, 'a+') as afile:
+        if MAINTAIN_STATE.time_gap_data is not None:
+            afile.write(str(MAINTAIN_STATE.time_gap_data))
+            afile.write('\n')
         for filename, onelist in any_dict.items():
-            regex = re.search(r"(\w+-\w+.stampede.tacc.utexas.edu)", filename).group()
-            hostname_dict[regex].append(onelist)
-
-        for hostname, error in hostname_dict.items():
-            easier_read_format = '%s ---> %s' % (hostname, error)
-            if len(hostname_dict[hostname]) is not 0:
-                afile.write(easier_read_format)
+            hostname_regex = re.search(r"(\w+-\w+.stampede.tacc.utexas.edu)", filename)
+            if hostname_regex is not None and hostname_regex.group() not in afile.read():
+                afile.write(hostname_regex.group())
                 afile.write('\n')
+            easier_read_format = '%s ---> %s' % (filename, onelist)
+            afile.write(easier_read_format)
+            afile.write('\n')
 
-def hostname_re(file_list):
-    hostnames = {}
-    for filename in file_list:
-        regex = re.search(r"(\w+-\w+.stampede.tacc.utexas.edu)", filename)
-        if regex.group() not in hostnames:
-            hostnames[regex.group()] = []
-    return hostnames
+
 
 def read_all_gz_files(path):
 
@@ -753,7 +798,6 @@ def read_all_gz_files(path):
     # Collects all files in a directory into a list to sort
 
     list_of_gz_files = get_list_of_files_in_directory(path)
-    hostnames = hostname_re(list_of_gz_files)
 
     if len(list_of_gz_files) != 0:  # If there is gz files in directory or items children
         for afile in sorted(list_of_gz_files):
@@ -767,17 +811,17 @@ def read_all_gz_files(path):
                     iowait_last_instance = iowait_extracter
                 checker = stp.check_lists_for_discrepencies(
                     stp.get_dict_of_iowait_lists, afile)
-                write_dict_to_txt(checker, txt_filename, hostnames)
+                write_dict_to_txt(checker, txt_filename)
                 iowait_extracter = extract_last_list_val(
                     stp.get_dict_of_iowait_lists)
                 iowait_last_instance = iowait_extracter
-                STORE_REBOOT_DATA.set_not_first_file(True) # boolean set to signify the first file is done
-                STORE_REBOOT_DATA.set_last_cpu_total_vals(stp.last_cpu_totals)  # sets the list in the RebootData class in order to maintain
-                                                                                # cpu total timings across files
+                MAINTAIN_STATE.set_not_first_file(True)  # boolean set to signify the first file is done
+                MAINTAIN_STATE.set_last_cpu_total_vals(stp.last_cpu_totals)  # sets the list in the RebootData class in order to maintain
+                                                                          # cpu total timings across files
 
         print 'Read all %s files in directory in %d seconds' % (
             filecount, time.time() - start_time)
-    else: # If there are no gz files in directory or its children
+    else:  # If there are no gz files in directory or its children
         print 'No \'.gz\' files in %s' % (path)
 
 
