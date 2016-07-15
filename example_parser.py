@@ -900,19 +900,18 @@ def read_all_gz_files(path):
     else:  # If there are no gz files in directory or its children
         print 'No \'.gz\' files in %s' % (path)
     
-
-def get_list_of_files_in_directory(source):
-
-    """
-    Walks the file structure and finds all files ending with .gz which are then
-    added to a list named match, match is returned
-    """
-
+def get_list_of_files_in_directory(fulldir):
     match = []
-    for root, dirnames, filenames in os.walk(source):
+    topdir = re.search("(.+tampede)", fulldir).group()
+    hostnames = os.listdir(topdir)
+    for hostname in hostnames:
+        gz_dir = os.path.join(topdir, hostname)
+        filenames = os.listdir(gz_dir)
         for filename in filenames:
             if filename.endswith('.gz'):
-                match.append(os.path.join(root, filename))
+                path = os.path.join(gz_dir, filename)
+                match.append(path)
+
     return match
 
 
