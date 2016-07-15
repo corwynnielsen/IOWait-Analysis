@@ -902,18 +902,12 @@ def read_all_gz_files(path):
     
 def get_list_of_files_in_directory(fulldir):
     match = []
-    topdir = re.search("(.+tampede)", fulldir).group()
-    hostnames = os.listdir(topdir)
-    for hostname in hostnames:
-        gz_dir = os.path.join(topdir, hostname)
-        filenames = os.listdir(gz_dir)
-        for filename in filenames:
-            if filename.endswith('.gz'):
-                path = os.path.join(gz_dir, filename)
-                match.append(path)
-
+    gz_dir = os.listdir(fulldir)
+    for filename in gz_dir:
+        if filename.endswith('.gz'):
+            path = os.path.join(fulldir, filename)
+            match.append(path)
     return match
-
 
 def main():
 
