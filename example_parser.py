@@ -226,7 +226,10 @@ class MaintainState(object):
 
     def __init__(self):
         self.last_cpu_total_vals = []
+<<<<<<< HEAD
         self.previous_cpu_total_time_list = 0
+=======
+>>>>>>> b9d5c1e00a8bf428467c20a7482527006b4f25e0
         self.all_error_dict = {}
         self.not_first_file = False
         self.file_created = False
@@ -412,6 +415,7 @@ class SimpleTaccParser(object):
         self.file_schemas = self.read_stats_file_header(filepath)
 
         if not self.file_schemas:
+<<<<<<< HEAD
             self.error("file `%s' bad header on line %s",
                        self.filename, self.fileline)
             pass
@@ -422,12 +426,33 @@ class SimpleTaccParser(object):
                     self.parse(line.strip())
                     if self.state == DONE:
                         break
+=======
+            if os.stat(self.filename).st_size > 31:
+                self.error("file `%s' bad header on line %s",
+                           self.filename, self.fileline)
+                pass
+
+        try:
+            if os.stat(self.filename).st_size > 31:
+                for line in filepath:
+                        self.fileline += 1
+                        self.parse(line.strip())
+                        if self.state == DONE:
+                            break
+            else:
+                logging.debug('%s empty, skipping parse', self.filename)
+
+>>>>>>> b9d5c1e00a8bf428467c20a7482527006b4f25e0
         except Exception as any_exception:
             self.error("file `%s' exception %s on line %s",
                        self.filename, str(any_exception), self.fileline)
             pass
+<<<<<<< HEAD
     
     
+=======
+
+>>>>>>> b9d5c1e00a8bf428467c20a7482527006b4f25e0
     def parse(self, line):
 
         """
@@ -492,15 +517,25 @@ class SimpleTaccParser(object):
         self.store_and_set_data()
         counter = 0
 
+<<<<<<< HEAD
         for key, val in any_dict.iteritems():
             iowait_nums = val
+=======
+        for dict_tuple in any_dict.items():
+            iowait_nums = dict_tuple[1]
+>>>>>>> b9d5c1e00a8bf428467c20a7482527006b4f25e0
             for num in iowait_nums:
                 counter += 1
                 if counter < len(iowait_nums) and num > iowait_nums[counter] \
                    and num is not 'flagged':
                     difference = int(num) - int(iowait_nums[counter])
                     difference_string = 'iowait difference: %s' % (difference)
+<<<<<<< HEAD
                     logging.error('Error with %s iowait numbers for %s,iowait value decreased by %s at %f', filename, key, difference, self.list_of_timestamps[counter-1])
+=======
+                    logging.error('Error with %s iowait numbers for %s,iowait \
+value decreased by %s at %f', filename, dict_tuple[0], difference, self.list_of_timestamps[counter-1])
+>>>>>>> b9d5c1e00a8bf428467c20a7482527006b4f25e0
                     if filename not in self.error_dict:
                         self.error_dict[filename] = []
                     timestamp = self.list_of_timestamps[counter-1]
@@ -536,7 +571,10 @@ class SimpleTaccParser(object):
                 write_reboot_data_to_txt(reboot_info, MAINTAIN_STATE.reboot_data_filename)
                 self.device_potential_reboot_counter = 0
 
+<<<<<<< HEAD
     
+=======
+>>>>>>> b9d5c1e00a8bf428467c20a7482527006b4f25e0
     def extract_last_cpu_total_vals(self, cpu_timings_dict):
 
         """
@@ -551,7 +589,11 @@ class SimpleTaccParser(object):
             except IndexError as e:
                 logging.error('%s: Cannot extract last cpu totals for file %s line %s', e, self.filename, self.fileline)
                 pass
+<<<<<<< HEAD
     
+=======
+
+>>>>>>> b9d5c1e00a8bf428467c20a7482527006b4f25e0
     def processdata(self, line):
 
         """
@@ -625,8 +667,16 @@ class SimpleTaccParser(object):
                     iowait_val = vals[self.get_schema(type_name)['iowait'].index]
                     self.dict_of_iowait_lists[device_name].append(iowait_val)
 
+<<<<<<< HEAD
     @staticmethod
     def check_for_time_gap_between_files(time_gap, first_timestamp, previous_file_last_timestamp, filename):
+=======
+
+    @staticmethod
+    def check_for_time_gap_between_files(time_gap, first_timestamp,
+                                                               previous_file_last_timestamp,
+                                                               filename):
+>>>>>>> b9d5c1e00a8bf428467c20a7482527006b4f25e0
 
         """
         Takes in four arguments, previous_file_last_timestamp is the last
@@ -773,6 +823,89 @@ class SqlInsert(object):
 
         self.con.commit()
 
+    def store_and_set_data(self):
+
+        """
+        Used to clean up check_lists_for_discrepencies and make it more
+        readable, modifies two collections in the MAINTAIN_STATE class and
+        last values cpu totals are stored using extract_last_cpu_totals
+        """
+        try:
+            self.extract_last_cpu_total_vals(self.dict_of_cpu_total_timings)
+            if MAINTAIN_STATE.not_first_file:
+                time_gap_data = self.check_for_time_gap_between_files(self.list_of_timestamps[0], MAINTAIN_STATE.previous_timestamp, 1200, MAINTAIN_STATE.previous_filename)
+                MAINTAIN_STATE.set_time_gap_data(time_gap_data)
+            MAINTAIN_STATE.set_previous_timestamp(self.timestamp)
+            MAINTAIN_STATE.set_previous_filename(self.filename)
+
+        except IndexError as e:
+            if len(self.dict_of_cpu_total_timings) == 0 and len(self.list_of_timestamps) == 0:
+                logging.error('%s: dict_of_cpu_total_timings and list_of_timestamps empty for file %s', e, self.filename)
+            elif len(self.dict_of_cpu_total_timings) == 0:
+                logging.error('%s: dict_of_cpu_total_timings empty for file %s', e, self.filename)
+            else:
+                logging.error('%s: ist_of_timestamps empty for file %s', e, self.filename)
+            pass
+
+class SqlInsert(object):
+
+    def __init__(self, host, user, password, database):
+
+        self.host = host
+        self.user = user
+        self.password = password
+        self.database = database
+        self.con = mdb.connect(host=host, user=user, passwd=password, db=database)
+
+
+    def insert(self, hostname, device_name, timestamp, discrepency, discrepency_type):
+
+        """
+        Insert an error record
+        """
+
+        cur = self.con.cursor()
+        cur.execute("INSERT IGNORE INTO hosts (hostname) VALUES (%s)", (hostname,))
+        if 'iowait' in discrepency_type:
+            discrepency_type = 'cpuiowait'
+            cur.execute("INSERT IGNORE INTO device_names (iowait_dev) VALUES (%s)", (device_name,))
+            self.con.commit()
+            cur.execute("INSERT IGNORE INTO metrics (name) VALUES (%s) ", ('cpuiowait'))
+        else:
+            print 'Unknown metric type'
+        
+        self.con.commit()
+
+        data_errors_query = "INSERT IGNORE INTO dataerrors (hostid, metricid, timestamp, discrepency, dev_name) \
+                                         VALUES((SELECT id FROM hosts WHERE hostname LIKE %s), (SELECT id FROM metrics WHERE name LIKE %s), %s, %s, (SELECT id from device_names WHERE iowait_dev LIKE %s))"
+
+        cur.execute(data_errors_query, [hostname, discrepency_type, timestamp, discrepency, device_name])
+
+
+    def recursive_insert(self, error_dict):
+
+        """
+        Loops through the error dictionary and inserts into the sql tables for each tuple in the error dictionary
+        """
+
+        for key, val in error_dict.items():
+            hostname = re.search(r"(\w+-\w+.stampede.tacc.utexas.edu)", key).group(1)
+            for dict_tuple in val:
+                device_name = dict_tuple[0]
+                timestamp = dict_tuple[1]
+                discrepency_type = re.search("(.+): \d+", dict_tuple[2]).group(1)
+                discrepency = re.search("iowait difference: (\d+)", dict_tuple[2]).group(1)
+                self.insert(hostname, device_name, timestamp, discrepency, discrepency_type)
+                self.postinsert()
+
+    def postinsert(self):
+
+        """
+        Must be called after insert.
+        """
+
+        self.con.commit()
+
 
 def extract_last_list_val(any_dict):
 
@@ -842,7 +975,11 @@ def write_dict_to_txt(any_dict, dict_text_filename):
     with open(dict_text_filename, 'a+') as afile:
         if MAINTAIN_STATE.time_gap_data is not None:
             afile.write(str(MAINTAIN_STATE.time_gap_data))
+<<<<<<< HEAD
         for filename, onelist in any_dict.iteritems():
+=======
+        for filename, onelist in any_dict.items():
+>>>>>>> b9d5c1e00a8bf428467c20a7482527006b4f25e0
             hostname_regex = re.search(r"(\w+-\w+.stampede.tacc.utexas.edu)", filename)
             if hostname_regex is not None and hostname_regex.group() not in afile.read():
                 afile.write(hostname_regex.group())
@@ -875,6 +1012,7 @@ def read_all_gz_files(path):
                     filecount += 1
                     stp = SimpleTaccParser()
                     stp.read_stats_file(filepath)
+<<<<<<< HEAD
                     if previous_instance is not None:  # used to ensure the script is not in the first instance of stp
                         append_last_vals(previous_instance, stp.get_dict_of_iowait_lists)
                     checker = stp.check_lists_for_discrepencies(stp.get_dict_of_iowait_lists, afile)
@@ -884,6 +1022,21 @@ def read_all_gz_files(path):
                     MAINTAIN_STATE.set_not_first_file(True)  # boolean set to signify the first file is done
                     MAINTAIN_STATE.set_last_cpu_total_vals(stp.last_cpu_total_vals)  # sets the list in the MaintainState class in order to maintain
                                                                                      # cpu total timings across files
+=======
+                    if os.stat(afile).st_size > 31:
+                        if previous_instance is not None:  # used to ensure the script is not in the first instance of stp
+                            append_last_vals(previous_instance, stp.get_dict_of_iowait_lists)
+
+                        checker = stp.check_lists_for_discrepencies(stp.get_dict_of_iowait_lists, afile)
+                        write_dict_to_txt(checker, txt_filename)
+                        iowait_extracter = extract_last_list_val(stp.get_dict_of_iowait_lists)
+                        previous_instance = iowait_extracter
+                        MAINTAIN_STATE.set_not_first_file(True)  # boolean set to signify the first file is done
+                        MAINTAIN_STATE.set_last_cpu_total_vals(stp.last_cpu_total_vals)  # sets the list in the MaintainState class in order to maintain
+                                                                                         # cpu total timings across files
+                    else:
+                        logging.error('%s empty, skipping iowait discrepency check', afile)
+>>>>>>> b9d5c1e00a8bf428467c20a7482527006b4f25e0
 
         print 'Read all %s files in directory in %d seconds' % (
             filecount, time.time() - start_time)
@@ -931,4 +1084,7 @@ def main():
 if __name__ == "__main__":
     main()
 
+<<<<<<< HEAD
 
+=======
+>>>>>>> b9d5c1e00a8bf428467c20a7482527006b4f25e0
